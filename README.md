@@ -3,10 +3,12 @@ A C based Simple Notepad Using the IUP GUI Library, currently Work In Progress
 
 *****
 ## Current features
-- Opening, Saving of File
+- Creating, Opening, Saving of File
 - Searching for Specific Words
 - Go to functions for lines
 - Changing of Font (Style and Size)
+- Recents Menu to display Recently Opened Files
+- Ability to Maintain changes in Font per session
 
 *****
 
