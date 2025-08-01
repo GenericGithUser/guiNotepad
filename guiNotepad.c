@@ -4,9 +4,31 @@
 #include <ctype.h>
 #include <iup.h>
 #include <iup_config.h>
+#include <io.h>
 
 Ihandle *textBox = NULL;
+Ihandle *diagBox = NULL;
+Ihandle* g_config = NULL;
+
 char filePath[2048] = "";
+
+const char *getFileTitle(const char *fileName){
+
+    int len = (int)strlen(fileName);
+    int offset = len - 1;
+
+    while (offset != 0)
+    {
+        if (fileName[offset] == '\\' || fileName[offset] == '/')
+        {
+            offset++;
+            break;
+        }
+        offset--;
+    }
+    
+    return fileName + offset;
+}
 
 int compString(const char *str1, const char *str2, int isCaseSens){
     if (!str1 || !str2)
@@ -89,7 +111,7 @@ char* readFile(const char *fileName){
     return str;
 }
 
-void writeFile(const char *fileName, const char *str, int count){
+int writeFile(const char *fileName, const char *str, int count){
 
     FILE *fp = fopen(fileName, "w");
     if(!fp){
@@ -103,29 +125,158 @@ void writeFile(const char *fileName, const char *str, int count){
     }
 
     fclose(fp);
+    return 1;
+    
+}
+
+void newFile(Ihandle *ih){
+
+    IupSetAttribute(diagBox, "TITLE", "Untitled - Notepad");
+    IupSetAttribute(textBox, "FILENAME", NULL);
+    IupSetAttribute(textBox, "DIRTY", "NO");
+    IupSetAttribute(textBox, "VALUE", "");
+}
+
+void openSubFunction(Ihandle *ih, const char *fileName){
+
+    char *str = readFile(fileName);
+        if (str){
+
+            IupSetfAttribute(diagBox, "TITLE", "%s - Notepad", getFileTitle(fileName));
+            IupSetfAttribute(textBox, "FILENAME", fileName);
+            IupSetAttribute(textBox, "DIRTY", "NO");
+            IupSetStrAttribute(textBox, "VALUE", str);
+            
+            strcpy(filePath, fileName);
+            IupConfigRecentUpdate(g_config, filePath);
+            free(str);
+            
+        }
+        
+
+}
+void saveAsSubFunc(const char *fileName){
+    char *str = IupGetAttribute(textBox, "VALUE");
+    int count = IupGetInt(textBox, "COUNT");
+    if (writeFile(fileName, str, count))
+        {
+            IupSetfAttribute(diagBox, "TITLE", "%s - Notepad", getFileTitle(fileName));
+            IupSetStrAttribute(textBox, "FILENAME", fileName);
+            IupSetAttribute(textBox, "DIRTY", "NO");
+            strcpy(filePath, fileName);
+            if(g_config){
+                IupConfigRecentUpdate(g_config, filePath);
+            IupConfigSetVariableStr(g_config, "Force", "Written", "yes");
+            }
+        }
+}
+
+int save(void);
+
+int saveCheck(Ihandle *ih){
+    if (IupGetInt(textBox, "DIRTY"))
+    {
+        switch (IupAlarm("Warning", "File Not Saved! Save it Now?", "Yes", "No", "Cancel"))
+        {
+        case 1:
+            save();
+            break;
+
+        case 2:
+            break;
+
+        case 3:
+            return 0;
+        }
+    }
+    return 1;
     
 }
 
 //   -------    CALLBACKS  -------
 
-int openFile(void){
+
+int dropFile(Ihandle *ih, const char *fileName){
+    if (saveCheck(ih))
+    {
+        openSubFunction(ih, fileName);
+    }
+    return IUP_DEFAULT;
+    
+}
+
+int textBoxChanged(){
+    
+    IupSetAttribute(textBox, "DIRTY", "YES");
+    return IUP_DEFAULT;
+
+}
+
+int fileMenuCallback(Ihandle *ih){
+
+    Ihandle *itemRevert = IupGetDialogChild(ih, "ITEM_REVERT");
+    Ihandle *itemSave = IupGetDialogChild(ih, "ITEM_SAVE");
+
+    char *fileName = IupGetAttribute(textBox, "FILENAME");
+    int dirty = IupGetInt(textBox, "DIRTY");
+
+    if ("DIRTY")
+    {
+        IupSetAttribute(itemSave, "ACTIVE", "YES");
+    }
+    else{
+        IupSetAttribute(itemSave, "ACTIVE", "NO");
+    }
+
+    if (dirty && fileName)
+    {
+        IupSetAttribute(itemRevert, "ACTIVE", "YES");
+
+    }
+    else{
+        IupSetAttribute(itemRevert, "ACTIVE", "NO");
+    }
+
+
+    return IUP_DEFAULT;
+    
+}
+
+
+int configCallback(Ihandle *ih){
+
+    if (saveCheck(ih))
+    {
+        char *fileName = IupGetAttribute(ih, "RECENTFILENAME");
+        openSubFunction(ih, fileName);
+    }
+    
+    return IUP_DEFAULT;
+    
+}
+
+
+
+int openFile(Ihandle *itemOpen){
+    
+    if (!saveCheck(itemOpen))
+    {
+        return IUP_DEFAULT;
+    }
     Ihandle *fileDiag = IupFileDlg(); // opens built in file selector
+
     IupSetStrAttribute(fileDiag, "DIALOGTYPE", "OPEN");
     IupSetAttribute(fileDiag, "EXTILTER", "Text Files|*.txt|All Files|*.*|");
+    IupSetAttributeHandle(fileDiag, "PARENTDIALOG", IupGetDialog(itemOpen));
 
     IupPopup(fileDiag, IUP_CENTER, IUP_CENTER);
 
     // check if user cancels
     if (IupGetInt(fileDiag, "STATUS") != -1){
         char *fileName = IupGetAttribute(fileDiag, "VALUE");
-        char *str = readFile(fileName);
-        if (str){
-            IupSetStrAttribute(textBox, "VALUE", str);
 
-            free(str);
-            
-        }
-        strcpy(filePath, fileName);
+        openSubFunction(itemOpen, fileName);
+        
     }
 
     IupDestroy(fileDiag);
@@ -133,15 +284,22 @@ int openFile(void){
 }
 
 
-int saveAs(void){
+int saveAs(Ihandle *parentDiag){
     Ihandle *fileDiag = IupFileDlg(); // opens built in file selector
     IupSetStrAttribute(fileDiag, "DIALOGTYPE", "SAVE");
     IupSetAttribute(fileDiag, "EXTILTER", "Text Files|*.txt|All Files|*.*|");
+    if (parentDiag)
+    {
+        IupSetAttributeHandle(fileDiag, "PARENTDIALOG", IupGetDialog(parentDiag));
+    }
+    
+    IupSetStrAttribute(fileDiag, "FILE", IupGetAttribute(textBox, "FILENAME"));
 
     IupPopup(fileDiag, IUP_CENTER, IUP_CENTER);
 
     // check if users cancels
     if (IupGetInt(fileDiag, "STATUS") != -1){
+        
         char *fileName = IupGetAttribute(fileDiag, "VALUE");
 
         if(!strchr(fileName, '.')){
@@ -150,11 +308,10 @@ int saveAs(void){
             snprintf(updateFileName, sizeof(updateFileName), "%s.txt", fileName);
             fileName = updateFileName;
         }
-
-        char *str = IupGetAttribute(textBox, "VALUE");
-        int count = IupGetInt(textBox, "COUNT");
-        writeFile(fileName, str, count);
-        strcpy(filePath, fileName);
+      
+        saveAsSubFunc(fileName);
+        
+       
     }
 
     IupDestroy(fileDiag);
@@ -164,14 +321,120 @@ int saveAs(void){
 int save(void){
     if (strlen(filePath) == 0)
     {
-        return saveAs();
+        return saveAs(diagBox);
     }
     
     char *str = IupGetAttribute(textBox, "VALUE");
     int count = strlen(str);
 
-    writeFile(filePath, str, count);
+    if (writeFile(filePath, str, count))
+    {
+        IupSetAttribute(textBox, "DIRTY", "NO");
+    }
+    
 
+    
+    if (g_config)
+    {
+       IupConfigRecentUpdate(g_config, filePath);
+       IupConfigSetVariableStr(g_config, "Force", "Written", "yes");
+    }
+    
+
+    return IUP_DEFAULT;
+}
+
+int newFileCallback(Ihandle *itemNew){
+    if (saveCheck(itemNew))
+    {
+        newFile(itemNew);
+    }
+    return IUP_DEFAULT;
+}
+
+int revertAct(Ihandle *itemRevert){
+
+    char *fileName = IupGetAttribute(textBox, "FILENAME");
+    openSubFunction(itemRevert, fileName);
+    return IUP_DEFAULT;
+}
+
+int editMenuCallback(Ihandle *ih){
+    Ihandle *clipboard = IupClipboard();
+    Ihandle *itemPaste = IupGetDialogChild(ih, "ITEM_PASTE");
+    Ihandle *itemCut = IupGetDialogChild(ih, "ITEM_CUT");
+    Ihandle *itemCopy = IupGetDialogChild(ih, "ITEM_COPY");
+    Ihandle *itemDelete = IupGetDialogChild(ih, "ITEM_DEL");
+
+    int start, end;
+
+    if (!IupGetInt(clipboard, "TEXTAVAILABLE"))
+    {
+        IupSetAttribute(itemPaste, "ACTIVE", "NO");
+    }
+    else{
+        IupSetAttribute(itemPaste, "ACTIVE", "YES");
+    }
+
+    IupGetIntInt(textBox, "SELECTIONPOS", &start, &end);
+
+    if (start == end)
+    {
+        IupSetAttribute(itemCut, "ACTIVE", "NO");
+        IupSetAttribute(itemCopy, "ACTIVE", "NO");
+        IupSetAttribute(itemDelete, "ACTIVE", "NO");
+    }
+    else{
+        IupSetAttribute(itemCut, "ACTIVE", "YES");
+        IupSetAttribute(itemCopy, "ACTIVE", "YES");
+        IupSetAttribute(itemDelete, "ACTIVE", "YES");
+    }
+    
+    IupDestroy(clipboard);
+    return IUP_DEFAULT;
+    
+}
+
+int editCopyCallback(Ihandle *itemCopy){
+
+    Ihandle *clipboard = IupClipboard();
+    IupSetAttribute(clipboard, "TEXT" , IupGetAttribute(textBox, "SELECTEDTEXT"));
+    IupDestroy(clipboard);
+    return IUP_DEFAULT;
+}
+
+int editCutCallback(Ihandle *itemCut){
+
+    Ihandle *clipboard =IupClipboard();
+    IupSetAttribute(clipboard, "TEXT" , IupGetAttribute(textBox, "SELECTEDTEXT"));
+    IupSetAttribute(textBox, "SELECTEDTEXT", "");
+    IupDestroy(clipboard);
+    
+    return IUP_DEFAULT;
+    
+}
+
+int editDeleteCallback(Ihandle *itemDelete){
+
+    IupSetAttribute(textBox, "SELECTEDTEXT", "");
+
+    return IUP_DEFAULT;
+    
+}
+
+int editPasteCallback(Ihandle *itemPaste){
+
+    Ihandle *clipboard =IupClipboard();
+    IupSetAttribute(textBox, "INSERT", IupGetAttribute(clipboard, "TEXT"));
+    IupDestroy(clipboard);
+
+    return IUP_DEFAULT;
+
+}
+int editSelectAllCallback(Ihandle *itemSelAll){
+
+    IupSetFocus(textBox);
+    IupSetAttribute(textBox, "SELECTION", "ALL");
     return IUP_DEFAULT;
 }
 
@@ -185,6 +448,8 @@ int modFont(void){
     {
         char *font = IupGetAttribute(fontDiag, "VALUE");
         IupSetAttribute(textBox, "FONT", font);
+
+        IupConfigSetVariableStr(g_config, "MainWindow", "Font", font);
     }
 
     IupDestroy(fontDiag);
@@ -389,9 +654,27 @@ int textBoxPointer(Ihandle *ih, int line, int col){
     return IUP_DEFAULT;
 }
 
-int exitProg(void){
+int exitProg(Ihandle *itemExit){
+
+    if (g_config)
+    {      
+        if (!saveCheck(itemExit))
+        {
+            return IUP_IGNORE;
+        }
+         
+        IupConfigDialogClosed(g_config, IupGetDialog(itemExit), "MainWindow");
+        IupConfigSave(g_config);
+        IupDestroy(g_config);
+    }
+    else
+    {
+        printf("[DEBUG] g_config is NULL\n");
+    }
+
     return IUP_CLOSE;
 }
+
 
 // int debug(Ihandle *ih, int c){
 //     printf("Pressed %d (%c)\n",c ,c);
@@ -401,55 +684,103 @@ int exitProg(void){
 
 
 int main(int argc, char **argv){
-    Ihandle *diagBox, *box;
-    Ihandle *fileMenu, *itemSave, *itemSaveAs, *itemOpen, *itemExit;
-    Ihandle *searchMenu, *itemGoto, *itemFind;
+    Ihandle *box;
+    Ihandle *fileMenu, *itemNew ,*itemSave, *itemSaveAs, *itemOpen, *itemRecent, *itemRevert, *itemExit;
+    Ihandle *editMenu, *itemCut, *itemCopy, *itemPaste, *itemDelete, *itemSelAll, *itemGoto, *itemFind;
     Ihandle *formatMenu, *itemFont;
     Ihandle *aboutMenu, *itemAbout;
-    Ihandle *subMenuFile, *subMenuSearch, *subMenuFormat, *subMenuAbout, *menu;
+    Ihandle *subMenuFile, *subMenuEdit, *subMenuFormat, *subMenuAbout, *menu;
     Ihandle *statusBar;
+    Ihandle *config;
+
+    const char *font;
 
     IupOpen(&argc, &argv);
 
-
+    
     textBox = IupText(NULL);
     IupSetAttribute(textBox, "MULTILINE", "YES");
     IupSetAttribute(textBox, "EXPAND", "YES");
+    IupSetAttribute(textBox, "FONT", "Courier, 18");
+    IupSetCallback(textBox, "CARET_CB", (Icallback)textBoxPointer);
+    IupSetCallback(textBox, "VALUECHANGED_CB", (Icallback)textBoxChanged);
+    IupSetCallback(textBox, "DROPFILES_CB", (Icallback)dropFile);
 
     statusBar = IupLabel("Ln 1, Col 1");
     IupSetAttribute(statusBar, "NAME", "STATUSBAR");
     IupSetAttribute(statusBar, "EXPAND", "HORIZONTAL");
     IupSetAttribute(statusBar, "PADDING", "10x5");
 
+
+    itemNew = IupItem("New\t Ctrl+N", NULL);
     itemSave = IupItem("Save\t Ctrl+S", NULL);
     itemSaveAs = IupItem("Save As\t Ctrl+Shift+S", NULL);
     itemOpen = IupItem("Open\t Ctrl+O", NULL);
+    itemRevert = IupItem("Revert", NULL);
     itemExit = IupItem("Exit\t Alt+4", NULL);
+
+
+    itemCut = IupItem("Cut\t Ctrl+X", NULL);
+    IupSetAttribute(itemCut, "NAME", "ITEM_CUT");
+    itemCopy = IupItem("Copy\t Ctrl+C", NULL);
+    IupSetAttribute(itemCopy, "NAME", "ITEM_COPY");
+    itemPaste = IupItem("Paste\t Ctrl+P", NULL);
+    IupSetAttribute(itemPaste, "NAME", "ITEM_PASTE");
+    itemDelete = IupItem("Delete\t Del", NULL);
+    IupSetAttribute(itemDelete, "NAME", "ITEM_DEL");
+    itemSelAll = IupItem("Select All\t Ctrl+A", NULL);
+
+
     itemGoto = IupItem("Goto\t Ctrl+G", NULL);
     itemFind = IupItem("Find\t Ctrl+F", NULL);
+
     itemFont = IupItem("Change Font", NULL);
     itemAbout = IupItem("About", NULL);
 
+    
+    IupSetCallback(itemNew, "ACTION", (Icallback)newFileCallback);
     IupSetCallback(itemExit, "ACTION", (Icallback)exitProg);
     IupSetCallback(itemSave, "ACTION", (Icallback)save);
     IupSetCallback(itemSaveAs, "ACTION", (Icallback)saveAs);
     IupSetCallback(itemOpen, "ACTION", (Icallback)openFile);
+    IupSetCallback(itemRevert, "ACTION", (Icallback)revertAct);
+
     IupSetCallback(itemGoto, "ACTION", (Icallback)gotoMainCallback);
     IupSetCallback(itemFind, "ACTION", (Icallback)findMainCallback);
+    IupSetCallback(itemCut, "ACTION", (Icallback)editCutCallback);
+    IupSetCallback(itemCopy, "ACTION", (Icallback)editCopyCallback);
+    IupSetCallback(itemPaste, "ACTION", (Icallback)editPasteCallback);
+    IupSetCallback(itemDelete, "ACTION", (Icallback)editDeleteCallback);
+    IupSetCallback(itemSelAll, "ACTION", (Icallback)editSelectAllCallback);
+
     IupSetCallback(itemFont, "ACTION", (Icallback)modFont);
+
     IupSetCallback(itemAbout, "ACTION", (Icallback)showAbout);
-    IupSetCallback(textBox, "CARET_CB", (Icallback)textBoxPointer);
+ 
+
+    itemRecent = IupMenu(NULL);
 
     fileMenu = IupMenu(
+        itemNew,
         itemSave,
         itemSaveAs,
         itemOpen,
+        itemRevert,
+        IupSeparator(),
+        IupSubmenu("Recent Files", itemRecent),
         IupSeparator(),
         itemExit,
         NULL
     );
 
-    searchMenu = IupMenu(
+    editMenu = IupMenu(
+        itemCut,
+        itemCopy,
+        itemPaste,
+        itemDelete,
+        IupSeparator(),
+        itemSelAll,
+        IupSeparator(),
         itemGoto,
         itemFind,
         NULL
@@ -465,19 +796,17 @@ int main(int argc, char **argv){
     );
 
     subMenuFile = IupSubmenu("File", fileMenu);
-    subMenuSearch = IupSubmenu("Search", searchMenu);
+    subMenuEdit = IupSubmenu("Edit", editMenu);
     subMenuFormat = IupSubmenu("Format", formatMenu);
     subMenuAbout = IupSubmenu("About", aboutMenu);
 
     menu = IupMenu(
         subMenuFile,
-        subMenuSearch,
+        subMenuEdit,
         subMenuFormat,
         subMenuAbout,
         NULL
     );
-
-
 
     box = IupVbox(
         textBox,
@@ -489,9 +818,29 @@ int main(int argc, char **argv){
     IupSetAttributeHandle(diagBox, "MENU", menu);
     IupSetAttribute(diagBox, "TITLE", "Notepad");
     IupSetAttribute(diagBox, "SIZE", "HALFxHALF");
+    IupSetCallback(diagBox, "CLOSE_CB", (Icallback)exitProg);
+    IupSetCallback(diagBox, "DROPFILES_CB", (Icallback)dropFile);
+    IupSetCallback(editMenu, "OPEN_CB", (Icallback)editMenuCallback);
+    IupSetCallback(fileMenu, "OPEN_CB", (Icallback)fileMenuCallback);
+
+
+    g_config = IupConfig();
+    IupSetStrAttribute(g_config, "APP_NAME", "Notepad");
+    IupConfigLoad(g_config);
+
+    IupSetAttributeHandle(diagBox, "CONFIG", g_config);
+
+    font = IupConfigGetVariableStr(g_config, "MainWindow", "Font");
+    if (font)
+    {
+        IupSetStrAttribute(textBox, "FONT", font);
+    }
+    
+
 
     IupSetAttributeHandle(NULL, "PARENTDIALOG", diagBox);
 
+    IupSetCallback(diagBox, "K_cN", (Icallback)newFileCallback);
     IupSetCallback(diagBox, "K_cO", (Icallback)openFile);
     IupSetCallback(diagBox, "K_cS", (Icallback)save);
     IupSetCallback(diagBox, "K_cyS", (Icallback)saveAs);
@@ -500,9 +849,24 @@ int main(int argc, char **argv){
     IupSetCallback(diagBox, "K_cG", (Icallback)gotoMainCallback);
     IupSetCallback(diagBox, "K_cF", (Icallback)findMainCallback);
 
-    IupShowXY(diagBox, IUP_CENTERPARENT, IUP_CENTERPARENT);
-    IupSetAttribute(diagBox, "USERSIZE", NULL);
 
+    IupConfigRecentInit(g_config, itemRecent, configCallback, 10);
+
+    IupConfigDialogShow(g_config, diagBox, "MainWindow");
+
+    
+    // init new file
+
+    newFile(diagBox);
+
+    // for opening file from cmd
+
+    if (argc > 1 && argv[1])
+    {
+        const char *fileName = argv[1];
+        openSubFunction(diagBox,fileName);
+    }
+    
 
     IupMainLoop();
 
